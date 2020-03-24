@@ -5,13 +5,14 @@ Authorization header, verifying, and locally authenticating
 Author: Gary Burgmann
 Email: garyburgmann@gmail.com
 Location: Springfield QLD, Australia
-Last update: 2019-02-10
+Last update: 2020-03-24 (Yuri van Geffen)
 """
 import json
 import uuid
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
+from firebase_admin import exceptions as firebase_exceptions
 from django.utils.encoding import smart_text
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -119,21 +120,21 @@ class FirebaseAuthentication(BaseFirebaseAuthentication):
                 firebase_token,
                 check_revoked=api_settings.FIREBASE_CHECK_JWT_REVOKED
             )
-        except ValueError as exc:
+        except firebase_auth.RevokedIdTokenError:
+            raise exceptions.AuthenticationFailed(
+                'Token revoked, inform the user to reauthenticate or '
+                'signOut().'
+            )
+        except firebase_auth.ExpiredIdTokenError:
+            raise exceptions.AuthenticationFailed(
+                'Token expired, inform the user to refresh their token or '
+                'sign out and in again.'
+            )
+        except firebase_auth.InvalidIdTokenError:
             raise exceptions.AuthenticationFailed(
                 'JWT was found to be invalid, or the App’s project ID cannot '
                 'be determined.'
             )
-        except firebase_auth.AuthError as exc:
-            if exc.code == 'ID_TOKEN_REVOKED':
-                raise exceptions.AuthenticationFailed(
-                    'Token revoked, inform the user to reauthenticate or '
-                    'signOut().'
-                )
-            else:
-                raise exceptions.AuthenticationFailed(
-                    'Token is invalid.'
-                )
 
     def authenticate_token(self, decoded_token):
         """
@@ -152,7 +153,7 @@ class FirebaseAuthentication(BaseFirebaseAuthentication):
             raise exceptions.AuthenticationFailed(
                 'User ID is None, empty or malformed'
             )
-        except firebase_auth.AuthError:
+        except firebase_exceptions.FirebaseError:
             raise exceptions.AuthenticationFailed(
                 'Error retrieving the user, or the specified user ID does not '
                 'exist'
