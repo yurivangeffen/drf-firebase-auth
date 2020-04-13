@@ -5,7 +5,7 @@ Authorization header, verifying, and locally authenticating
 Author: Gary Burgmann
 Email: garyburgmann@gmail.com
 Location: Springfield QLD, Australia
-Last update: 2020-03-24 (Yuri van Geffen)
+Last update: 2020-04-13 (Yuri van Geffen)
 """
 import json
 import uuid
@@ -42,7 +42,7 @@ class BaseFirebaseAuthentication(authentication.BaseAuthentication):
     """
     def authenticate(self, request):
         """
-        With ALLOW_ANONYMOUS_REQUESTS, set request.user to an AnonymousUser, 
+        With ALLOW_ANONYMOUS_REQUESTS, set request.user to an AnonymousUser,
         allowing us to configure access at the permissions level.
         """
         authorization_header = authentication.get_authorization_header(request)
@@ -59,12 +59,7 @@ class BaseFirebaseAuthentication(authentication.BaseAuthentication):
 
         firebase_user = self.authenticate_token(decoded_token)
 
-        local_user = self.get_or_create_local_user(firebase_user)
-
-        self.create_local_firebase_user(local_user, firebase_user)
-        # authenicated_user = self.authenticate_user(firebase_user)
-
-        return (local_user, decoded_token)
+        return (firebase_user, decoded_token)
 
     def get_token(self, request):
         raise NotImplementedError('get_token() has not been implemented.')
@@ -74,13 +69,6 @@ class BaseFirebaseAuthentication(authentication.BaseAuthentication):
 
     def authenticate_token(self, decoded_token):
         raise NotImplementedError('authenticate_token() has not been implemented.')
-
-    def get_or_create_local_user(self, firebase_user):
-        raise NotImplementedError('get_or_create_local_user() has not been implemented.')
-
-    def create_local_firebase_user(self, local_user, firebase_user):
-        raise NotImplementedError('create_local_firebase_user() has not been implemented.')
-
 
 class FirebaseAuthentication(BaseFirebaseAuthentication):
     """
@@ -107,7 +95,7 @@ class FirebaseAuthentication(BaseFirebaseAuthentication):
             raise exceptions.AuthenticationFailed(
                 'Invalid Authorization header prefix, expecting: JWT.'
             )
-        
+
         return authorization_header[1]
 
     def decode_token(self, firebase_token):
@@ -148,6 +136,8 @@ class FirebaseAuthentication(BaseFirebaseAuthentication):
                     raise exceptions.AuthenticationFailed(
                         'Email address of this user has not been verified.'
                     )
+            firebase_user.is_staff = firebase_user.custom_claims['admin']
+            firebase_user.is_authenticated = True
             return firebase_user
         except ValueError:
             raise exceptions.AuthenticationFailed(
@@ -158,94 +148,7 @@ class FirebaseAuthentication(BaseFirebaseAuthentication):
                 'Error retrieving the user, or the specified user ID does not '
                 'exist'
             )
-
-    def get_or_create_local_user(self, firebase_user):
-        """
-        Attempts to return or create a local User from Firebase user data
-        """
-        email = firebase_user.email if firebase_user.email \
-            else firebase_user.provider_data[0].email
-        try:
-            user = User.objects.get(email=email)
-            if not user.is_active:
-                raise exceptions.AuthenticationFailed(
-                    'User account is not currently active.'
-                )
-            user.last_login = timezone.now()
-            user.save()
-            return user
-        except User.DoesNotExist:
-            if not api_settings.FIREBASE_CREATE_LOCAL_USER:
-                raise exceptions.AuthenticationFailed(
-                    'User is not registered to the application.'
-                )
-            username = '_'.join(
-                firebase_user.display_name.split(' ') if firebase_user.display_name \
-                else str(uuid.uuid4())
-            )
-            username = username if len(username) <= 30 else username[:30]
-            new_user = User.objects.create_user(
-                username=username,
-                email=email
-            )
-            new_user.last_login = timezone.now()
-            if api_settings.FIREBASE_ATTEMPT_CREATE_WITH_DISPLAY_NAME:
-                display_name = firebase_user.display_name.split()
-                if len(display_name) == 2:
-                    new_user.first_name = display_name[0]
-                    new_user.last_name = display_name[1]
-            new_user.save()
-            # self.create_local_firebase_user(new_user, firebase_user)
-            return new_user
-
-    def create_local_firebase_user(self, user, firebase_user):
-        """
-        Create a local FireBase model if one does not already exist
-        """
-        # pylint: disable=no-member
-        local_firebase_user = FirebaseUser.objects.filter(
-            user=user
-        ).first()
-
-        if not local_firebase_user:
-            new_firebase_user = FirebaseUser(
-                uid=firebase_user.uid,
-                user=user
-            )
-            new_firebase_user.save()
-            local_firebase_user = new_firebase_user
-
-        if local_firebase_user.uid != firebase_user.uid:
-            local_firebase_user.uid = firebase_user.uid
-            local_firebase_user.save()
-        
-        # store FirebaseUserProvider data
-        for provider in firebase_user.provider_data:
-            local_provider = FirebaseUserProvider.objects.filter(
-                provider_id=provider.provider_id,
-                firebase_user=local_firebase_user
-            ).first()
-            if not local_provider:
-                new_local_provider = FirebaseUserProvider.objects.create(
-                    provider_id=provider.provider_id,
-                    uid=provider.uid,
-                    firebase_user=local_firebase_user,
-                )
-                new_local_provider.save()
-
-        # catch locally stored providers that are no longer associated at Firebase
-        local_providers = FirebaseUserProvider.objects.filter(
-            firebase_user=local_firebase_user
-        )
-        if len(local_providers) != len(firebase_user.provider_data):
-            current_providers = \
-                [x.provider_id for x in firebase_user.provider_data]
-            for provider in local_providers:
-                if provider.provider_id not in current_providers:
-                    FirebaseUserProvider.objects.filter(
-                        id=provider.id
-                    ).delete()
-
+            
     def authenticate_header(self, request):
         """
         Return a string to be used as the value of the `WWW-Authenticate`
